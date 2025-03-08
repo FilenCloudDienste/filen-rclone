@@ -536,6 +536,9 @@ func AddBackendFlags() {
 
 // Main runs rclone interpreting flags and commands out of os.Args
 func Main() {
+	// TODO only for development:
+	fmt.Println("=== filen-rclone ===")
+
 	setupRootCommand(Root)
 	AddBackendFlags()
 	if err := Root.Execute(); err != nil {
