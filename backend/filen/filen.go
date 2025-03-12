@@ -8,10 +8,12 @@ import (
 	sdk "github.com/FilenCloudDienste/filen-sdk-go/filen"
 	"github.com/FilenCloudDienste/filen-sdk-go/filen/types"
 	"github.com/rclone/rclone/fs"
+	"github.com/rclone/rclone/fs/config"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/configstruct"
 	"github.com/rclone/rclone/fs/config/obscure"
 	"github.com/rclone/rclone/fs/hash"
+	"github.com/rclone/rclone/lib/encoder"
 	"io"
 	pathModule "path"
 	"time"
@@ -42,6 +44,12 @@ func init() {
 				IsPassword: true,
 				Sensitive:  true,
 			},
+			{
+				Name:     config.ConfigEncoding,
+				Help:     config.ConfigEncodingHelp,
+				Advanced: true,
+				Default:  encoder.Standard | encoder.EncodeInvalidUtf8,
+			},
 		},
 	})
 }
@@ -65,24 +73,52 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	if err != nil {
 		return nil, err
 	}
-	return &Fs{name, root, filen}, nil
+	maybeRootDir, err := filen.FindDirectory(ctx, root)
+	if errors.Is(err, fs.ErrorIsFile) { // FsIsFile special case
+		var err2 error
+		root = pathModule.Dir(root)
+		maybeRootDir, err2 = filen.FindDirectory(ctx, root)
+		if err2 != nil {
+			return nil, err2
+		}
+	} else if err != nil {
+		return nil, err
+	}
+
+	fileSystem := &Fs{
+		name:  name,
+		root:  Directory{},
+		filen: filen,
+		Enc:   opt.Encoder,
+	}
+
+	fileSystem.root = Directory{
+		fs:        fileSystem,
+		directory: maybeRootDir, // could be null at this point
+		path:      root,
+	}
+
+	// must return the error from FindDirectory (see FsIsFile)
+	return fileSystem, err
 }
 
 type Fs struct {
 	name  string
-	root  string
+	root  Directory
 	filen *sdk.Filen
+	Enc   encoder.MultiEncoder
 }
 
 // resolvePath returns the absolute path specified by the input path, which is seen relative to the remote's root.
 func (f *Fs) resolvePath(path string) string {
-	return pathModule.Join(f.root, path)
+	return pathModule.Join(f.root.path, path)
 }
 
 type Options struct {
-	Email    string `config:"email"`
-	Password string `config:"password"`
-	APIKey   string `config:"api_key"`
+	Email    string               `config:"email"`
+	Password string               `config:"password"`
+	APIKey   string               `config:"api_key"`
+	Encoder  encoder.MultiEncoder `config:"encoding"`
 }
 
 func (f *Fs) Name() string {
@@ -90,11 +126,11 @@ func (f *Fs) Name() string {
 }
 
 func (f *Fs) Root() string {
-	return f.root
+	return f.root.path
 }
 
 func (f *Fs) String() string {
-	return fmt.Sprintf("Filen %s at /%s", f.filen.Email, f.root)
+	return fmt.Sprintf("Filen %s at /%s", f.filen.Email, f.root.String())
 }
 
 func (f *Fs) Precision() time.Duration {
@@ -107,8 +143,8 @@ func (f *Fs) Hashes() hash.Set {
 
 func (f *Fs) Features() *fs.Features {
 	return &fs.Features{
-		ReadMimeType:            true,
-		WriteMimeType:           true,
+		ReadMimeType: true,
+		//WriteMimeType:           true, // requires parsing metadata options, todo later
 		CanHaveEmptyDirectories: true,
 		// ReadMetadata: true,
 		// WriteMetadata: true,
@@ -119,56 +155,102 @@ func (f *Fs) Features() *fs.Features {
 }
 
 func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
+	dir = f.Enc.FromStandardPath(dir)
 	// find directory uuid
-	obj, err := f.filen.FindItem(ctx, f.resolvePath(dir), true)
+	directory, err := f.filen.FindDirectory(ctx, f.resolvePath(dir))
 	if err != nil {
 		return nil, err
 	}
 
-	if obj == nil {
-		return nil, errors.New("directory not found")
-	}
-
-	directory, ok := obj.(types.DirectoryInterface)
-	if !ok {
-		return nil, errors.New("not a directory")
+	if directory == nil {
+		return nil, fs.ErrorDirNotFound
 	}
 
 	// read directory content
-	files, directories, err := f.filen.ReadDirectory(ctx, directory.GetUUID())
+	files, directories, err := f.filen.ReadDirectory(ctx, directory)
 	if err != nil {
 		return nil, err
 	}
+	entries = make(fs.DirEntries, 0, len(files)+len(directories))
 
 	for _, directory := range directories {
-		entries = append(entries, &Directory{f, pathModule.Join(dir, directory.Name), directory})
+		entries = append(entries, &Directory{
+			fs:        f,
+			path:      pathModule.Join(dir, directory.Name),
+			directory: directory,
+		})
 	}
 	for _, file := range files {
-		entries = append(entries, &File{f, pathModule.Join(dir, file.Name), file})
+		file := &File{
+			fs:   f,
+			path: pathModule.Join(dir, file.Name),
+			file: file,
+		}
+		entries = append(entries, file)
 	}
 	return entries, nil
 }
 
 func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
-	obj, err := f.filen.FindItem(ctx, f.resolvePath(remote), false)
+	remote = f.Enc.FromStandardPath(remote)
+	obj, err := f.filen.FindItem(ctx, f.resolvePath(remote))
 	if err != nil {
 		return nil, err
 	}
 	file, ok := obj.(*types.File)
-	if !ok {
+	if !ok || obj == nil {
 		return nil, fs.ErrorObjectNotFound
 	}
-	return &File{f, remote, file}, nil
+	return &File{
+		fs:   f,
+		path: remote,
+		file: file,
+	}, nil
 }
 
 func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
-	path := src.Remote()
+
+	//var offset int64 = 0
+	//var limit int64 = -1 // -1 means no limit
+	//
+	//// Parse the options
+	//for _, option := range options {
+	//	switch opt := option.(type) {
+	//	case *fs.SeekOption:
+	//		offset = opt.Offset
+	//	case *fs.RangeOption:
+	//		offset = opt.Start
+	//		limit = opt.End - opt.Start + 1 // +1 because End is inclusive
+	//	}
+	//}
+	//
+	//if offset > 0 {
+	//	// If the reader supports seeking directly (e.g., *os.File), use that
+	//	if seeker, ok := in.(io.Seeker); ok {
+	//		_, err := seeker.Seek(offset, io.SeekStart)
+	//		if err != nil {
+	//			return nil, fmt.Errorf("failed to seek to offset %d: %w", offset, err)
+	//		}
+	//	} else {
+	//		// Otherwise, we need to read and discard bytes
+	//		if _, err := io.CopyN(io.Discard, in, offset); err != nil {
+	//			return nil, fmt.Errorf("failed to discard %d bytes: %w", offset, err)
+	//		}
+	//	}
+	//}
+	//
+	//// Apply a limit if specified
+	//if limit >= 0 {
+	//	in = io.LimitReader(in, limit)
+	//}
+
+	path := f.resolvePath(f.Enc.FromStandardPath(src.Remote()))
 	modTime := src.ModTime(ctx)
-	parent, err := f.filen.FindDirectoryOrCreate(ctx, f.root)
+	parent, err := f.filen.FindDirectoryOrCreate(ctx, pathModule.Dir(path))
 	if err != nil {
 		return nil, err
 	}
-	incompleteFile, err := types.NewIncompleteFile(f.filen.AuthVersion, path, "", modTime, modTime, parent.GetUUID())
+	incompleteFile, err := types.NewIncompleteFile(f.filen.AuthVersion, pathModule.Base(path), "", modTime, modTime, parent)
 	if err != nil {
 		return nil, err
 	}
@@ -176,20 +258,31 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 	if err != nil {
 		return nil, err
 	}
-	return &File{f, path, uploadedFile}, nil
+	return &File{
+		fs:   f,
+		path: path,
+		file: uploadedFile,
+	}, nil
 }
 
 func (f *Fs) Mkdir(ctx context.Context, dir string) error {
-	_, err := f.filen.FindDirectoryOrCreate(ctx, f.resolvePath(dir))
+	dirObj, err := f.filen.FindDirectoryOrCreate(ctx, f.resolvePath(f.Enc.FromStandardPath(dir)))
 	if err != nil {
 		return err
+	}
+	if dir == f.root.path {
+		f.root.directory = dirObj
 	}
 	return nil
 }
 
 func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 	// find directory
-	directory, err := f.filen.FindItem(ctx, f.resolvePath(dir), true)
+	resolvedPath := f.resolvePath(f.Enc.FromStandardPath(dir))
+	//if resolvedPath == f.root.path {
+	//	return fs.ErrorDirNotFound
+	//}
+	directory, err := f.filen.FindDirectory(ctx, resolvedPath)
 	if err != nil {
 		return err
 	}
@@ -197,7 +290,7 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 		return errors.New("directory not found")
 	}
 
-	files, dirs, err := f.filen.ReadDirectory(ctx, directory.GetUUID())
+	files, dirs, err := f.filen.ReadDirectory(ctx, directory)
 	if err != nil {
 		return err
 	}
@@ -206,7 +299,7 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 	}
 
 	// trash directory
-	err = f.filen.TrashDirectory(ctx, directory.GetUUID())
+	err = f.filen.TrashDirectory(ctx, directory)
 	if err != nil {
 		return err
 	}
@@ -218,7 +311,7 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 type Directory struct {
 	fs        *Fs
 	path      string
-	directory *types.Directory
+	directory types.DirectoryInterface
 }
 
 func (dir *Directory) Fs() fs.Info {
@@ -226,23 +319,32 @@ func (dir *Directory) Fs() fs.Info {
 }
 
 func (dir *Directory) String() string {
-	return dir.path
+	if dir == nil {
+		return "<nil>"
+	}
+	return dir.Remote()
 }
 
 func (dir *Directory) Remote() string {
-	return dir.path
+	return dir.fs.Enc.ToStandardPath(dir.path)
 }
 
 func (dir *Directory) ModTime(ctx context.Context) time.Time {
-	if dir.directory.Created.IsZero() {
-		obj, err := dir.fs.filen.FindItem(ctx, dir.path, true)
+	directory, ok := dir.directory.(*types.Directory)
+	if !ok {
+		return time.Time{} // todo add account creation time?
+	}
+
+	if directory.Created.IsZero() {
+		obj, err := dir.fs.filen.FindDirectory(ctx, dir.path)
 		newDir, ok := obj.(*types.Directory)
 		if err != nil || !ok {
 			return time.Now()
 		}
+		directory = newDir
 		dir.directory = newDir
 	}
-	return dir.directory.Created
+	return directory.Created
 }
 
 func (dir *Directory) Size() int64 {
@@ -254,7 +356,7 @@ func (dir *Directory) Items() int64 {
 }
 
 func (dir *Directory) ID() string {
-	return dir.directory.UUID
+	return dir.directory.GetUUID()
 }
 
 // File
@@ -273,11 +375,11 @@ func (file *File) String() string {
 	if file == nil {
 		return "<nil>"
 	}
-	return file.path
+	return file.Remote()
 }
 
 func (file *File) Remote() string {
-	return file.path
+	return file.fs.Enc.ToStandardPath(file.path)
 }
 
 func (file *File) ModTime(ctx context.Context) time.Time {
@@ -286,7 +388,7 @@ func (file *File) ModTime(ctx context.Context) time.Time {
 	// if the backend API gets changed allowing for single call FindItem calls
 	// then we should probably swap over to that
 	if file.file.LastModified.IsZero() {
-		obj, err := file.fs.filen.FindItem(ctx, file.path, false)
+		obj, err := file.fs.filen.FindItem(ctx, file.path)
 		newFile, ok := obj.(*types.File)
 		if err == nil && ok {
 			file.file = newFile
@@ -304,7 +406,7 @@ func (file *File) Hash(ctx context.Context, ty hash.Type) (string, error) {
 		return "", hash.ErrUnsupported
 	}
 	if file.file.Hash == "" {
-		maybeFile, err := file.fs.filen.FindItem(ctx, file.path, false)
+		maybeFile, err := file.fs.filen.FindItem(ctx, file.path)
 		if err != nil {
 			return "", err
 		}
@@ -328,12 +430,31 @@ func (file *File) SetModTime(ctx context.Context, t time.Time) error {
 }
 
 func (file *File) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadCloser, error) {
-	readCloser := file.fs.filen.GetDownloadReader(ctx, file.file)
+	fs.FixRangeOption(options, file.Size())
+	// Create variables to hold our options
+	var offset int64 = 0
+	var limit int64 = -1 // -1 means no limit
+
+	// Parse the options
+	for _, option := range options {
+		switch opt := option.(type) {
+		case *fs.RangeOption:
+			offset = opt.Start
+			limit = opt.End + 1 // +1 because End is inclusive
+		}
+	}
+
+	// Get the base reader
+	readCloser := file.fs.filen.GetDownloadReaderWithOffset(ctx, file.file, int(offset), int(limit))
 	return readCloser, nil
 }
 
 func (file *File) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) error {
-	uploadedFile, err := file.fs.filen.UploadFile(ctx, &file.file.IncompleteFile, in)
+	newIncomplete, err := file.file.NewFromBase(file.fs.filen.AuthVersion)
+	if err != nil {
+		return err
+	}
+	uploadedFile, err := file.fs.filen.UploadFile(ctx, newIncomplete, in)
 	if err != nil {
 		return err
 	}
@@ -342,7 +463,7 @@ func (file *File) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, o
 }
 
 func (file *File) Remove(ctx context.Context) error {
-	err := file.fs.filen.TrashFile(ctx, file.file.UUID)
+	err := file.fs.filen.TrashFile(ctx, *file.file)
 	if err != nil {
 		return err
 	}
@@ -351,4 +472,12 @@ func (file *File) Remove(ctx context.Context) error {
 
 func (file *File) MimeType(_ context.Context) string {
 	return file.file.MimeType
+}
+
+func (file *File) ID() string {
+	return file.file.GetUUID()
+}
+
+func (file *File) ParentID() string {
+	return file.file.GetParent()
 }
