@@ -450,10 +450,13 @@ func (file *File) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadCl
 }
 
 func (file *File) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) error {
+	newModTime := src.ModTime(ctx)
 	newIncomplete, err := file.file.NewFromBase(file.fs.filen.AuthVersion)
 	if err != nil {
 		return err
 	}
+	newIncomplete.LastModified = newModTime
+	newIncomplete.Created = newModTime
 	uploadedFile, err := file.fs.filen.UploadFile(ctx, newIncomplete, in)
 	if err != nil {
 		return err
