@@ -209,48 +209,14 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 }
 
 func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
-
-	//var offset int64 = 0
-	//var limit int64 = -1 // -1 means no limit
-	//
-	//// Parse the options
-	//for _, option := range options {
-	//	switch opt := option.(type) {
-	//	case *fs.SeekOption:
-	//		offset = opt.Offset
-	//	case *fs.RangeOption:
-	//		offset = opt.Start
-	//		limit = opt.End - opt.Start + 1 // +1 because End is inclusive
-	//	}
-	//}
-	//
-	//if offset > 0 {
-	//	// If the reader supports seeking directly (e.g., *os.File), use that
-	//	if seeker, ok := in.(io.Seeker); ok {
-	//		_, err := seeker.Seek(offset, io.SeekStart)
-	//		if err != nil {
-	//			return nil, fmt.Errorf("failed to seek to offset %d: %w", offset, err)
-	//		}
-	//	} else {
-	//		// Otherwise, we need to read and discard bytes
-	//		if _, err := io.CopyN(io.Discard, in, offset); err != nil {
-	//			return nil, fmt.Errorf("failed to discard %d bytes: %w", offset, err)
-	//		}
-	//	}
-	//}
-	//
-	//// Apply a limit if specified
-	//if limit >= 0 {
-	//	in = io.LimitReader(in, limit)
-	//}
-
-	path := f.resolvePath(f.Enc.FromStandardPath(src.Remote()))
+	path := f.Enc.FromStandardPath(src.Remote())
+	resolvedPath := f.resolvePath(path)
 	modTime := src.ModTime(ctx)
-	parent, err := f.filen.FindDirectoryOrCreate(ctx, pathModule.Dir(path))
+	parent, err := f.filen.FindDirectoryOrCreate(ctx, pathModule.Dir(resolvedPath))
 	if err != nil {
 		return nil, err
 	}
-	incompleteFile, err := types.NewIncompleteFile(f.filen.AuthVersion, pathModule.Base(path), "", modTime, modTime, parent)
+	incompleteFile, err := types.NewIncompleteFile(f.filen.AuthVersion, pathModule.Base(resolvedPath), "", modTime, modTime, parent)
 	if err != nil {
 		return nil, err
 	}
