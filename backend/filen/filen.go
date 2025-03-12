@@ -14,12 +14,14 @@ import (
 	"github.com/rclone/rclone/fs/config/obscure"
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/lib/encoder"
+	"go.uber.org/zap"
 	"io"
 	pathModule "path"
 	"time"
 )
 
 func init() {
+	zap.ReplaceGlobals(zap.Must(zap.NewDevelopment()))
 	fs.Register(&fs.RegInfo{
 		Name:        "filen",
 		Description: "Filen",
@@ -55,6 +57,7 @@ func init() {
 }
 
 func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, error) {
+	zap.S().Debugw("NewFs", "name", name, "root", root)
 	opt := new(Options)
 	err := configstruct.Set(m, opt)
 	if err != nil {
@@ -78,10 +81,13 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		var err2 error
 		root = pathModule.Dir(root)
 		maybeRootDir, err2 = filen.FindDirectory(ctx, root)
+		zap.S().Debugw("NewFs FsIsFile special case", "maybeRootDir", maybeRootDir, "err", err, "err2", err2)
 		if err2 != nil {
 			return nil, err2
 		}
 	} else if err != nil {
+		zap.S().Debugw("NewFs error", "err", err)
+
 		return nil, err
 	}
 
@@ -156,6 +162,7 @@ func (f *Fs) Features() *fs.Features {
 
 func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
 	dir = f.Enc.FromStandardPath(dir)
+	zap.S().Debugw("List", "dir", dir, "resolved: ", f.resolvePath(dir))
 	// find directory uuid
 	directory, err := f.filen.FindDirectory(ctx, f.resolvePath(dir))
 	if err != nil {
@@ -171,6 +178,8 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 	if err != nil {
 		return nil, err
 	}
+	zap.S().Debugw("List", "files", files, "directories", directories)
+
 	entries = make(fs.DirEntries, 0, len(files)+len(directories))
 
 	for _, directory := range directories {
@@ -186,8 +195,11 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 			path: pathModule.Join(dir, file.Name),
 			file: file,
 		}
+		zap.S().Debugw("List adding file", "file", file)
+
 		entries = append(entries, file)
 	}
+	zap.S().Debugw("List result: ", "entries", entries)
 	return entries, nil
 }
 
@@ -246,15 +258,24 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 
 	path := f.resolvePath(f.Enc.FromStandardPath(src.Remote()))
 	modTime := src.ModTime(ctx)
+	zap.S().Debugw("Put", "src", src, "resolved: ", path)
+
 	parent, err := f.filen.FindDirectoryOrCreate(ctx, pathModule.Dir(path))
 	if err != nil {
 		return nil, err
 	}
+	zap.S().Debugw("Put", "parent", parent, "root: ", f.root.directory, "base", pathModule.Base(path))
+
 	incompleteFile, err := types.NewIncompleteFile(f.filen.AuthVersion, pathModule.Base(path), "", modTime, modTime, parent)
 	if err != nil {
 		return nil, err
 	}
 	uploadedFile, err := f.filen.UploadFile(ctx, incompleteFile, in)
+	if err != nil {
+		return nil, err
+	}
+	files, dirs, err := f.filen.ReadDirectory(ctx, parent)
+	zap.S().Debugw("contents: ", "files", files, "dirs", dirs)
 	if err != nil {
 		return nil, err
 	}
@@ -266,6 +287,8 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 }
 
 func (f *Fs) Mkdir(ctx context.Context, dir string) error {
+	zap.S().Debugw("Mkdir", "dir", dir, "resolved: ", f.resolvePath(dir))
+
 	dirObj, err := f.filen.FindDirectoryOrCreate(ctx, f.resolvePath(f.Enc.FromStandardPath(dir)))
 	if err != nil {
 		return err
@@ -277,6 +300,8 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 }
 
 func (f *Fs) Rmdir(ctx context.Context, dir string) error {
+	zap.S().Debugw("Rmdir", "dir", dir, "resolved: ", f.resolvePath(dir))
+
 	// find directory
 	resolvedPath := f.resolvePath(f.Enc.FromStandardPath(dir))
 	//if resolvedPath == f.root.path {
@@ -330,6 +355,8 @@ func (dir *Directory) Remote() string {
 }
 
 func (dir *Directory) ModTime(ctx context.Context) time.Time {
+	zap.S().Debugw("ModTime", "dir", dir.path)
+
 	directory, ok := dir.directory.(*types.Directory)
 	if !ok {
 		return time.Time{} // todo add account creation time?
@@ -383,6 +410,8 @@ func (file *File) Remote() string {
 }
 
 func (file *File) ModTime(ctx context.Context) time.Time {
+	zap.S().Debugw("ModTime", "file", file.path)
+
 	// doing this 'properly' is annoying
 	// we'd have to call FindItem which can be pretty slow
 	// if the backend API gets changed allowing for single call FindItem calls
@@ -443,6 +472,7 @@ func (file *File) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadCl
 			limit = opt.End + 1 // +1 because End is inclusive
 		}
 	}
+	zap.S().Debugw("Opening file", "file", file.path, "size", file.Size(), "offset", offset, "limit", limit)
 
 	// Get the base reader
 	readCloser := file.fs.filen.GetDownloadReaderWithOffset(ctx, file.file, int(offset), int(limit))
@@ -466,6 +496,8 @@ func (file *File) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, o
 }
 
 func (file *File) Remove(ctx context.Context) error {
+	zap.S().Debugw("Remove", "file", file.path)
+
 	err := file.fs.filen.TrashFile(ctx, *file.file)
 	if err != nil {
 		return err
