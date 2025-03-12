@@ -258,7 +258,7 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 
 	path := f.resolvePath(f.Enc.FromStandardPath(src.Remote()))
 	modTime := src.ModTime(ctx)
-	zap.S().Debugw("Put", "src", src, "resolved: ", path)
+	zap.S().Debugw("Put", "src", src, "resolved", path, "modTime", modTime)
 
 	parent, err := f.filen.FindDirectoryOrCreate(ctx, pathModule.Dir(path))
 	if err != nil {
@@ -410,7 +410,6 @@ func (file *File) Remote() string {
 }
 
 func (file *File) ModTime(ctx context.Context) time.Time {
-	zap.S().Debugw("ModTime", "file", file.path)
 
 	// doing this 'properly' is annoying
 	// we'd have to call FindItem which can be pretty slow
@@ -423,6 +422,7 @@ func (file *File) ModTime(ctx context.Context) time.Time {
 			file.file = newFile
 		}
 	}
+	zap.S().Debugw("ModTime", "file", file.path, "lastModified", file.file.LastModified)
 	return file.file.LastModified
 }
 
@@ -480,6 +480,7 @@ func (file *File) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadCl
 }
 
 func (file *File) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) error {
+	zap.S().Debugw("Update", "file", file.path)
 	newModTime := src.ModTime(ctx)
 	newIncomplete, err := file.file.NewFromBase(file.fs.filen.AuthVersion)
 	if err != nil {
