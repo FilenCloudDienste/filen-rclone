@@ -193,12 +193,11 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 
 func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	remote = f.Enc.FromStandardPath(remote)
-	obj, err := f.filen.FindItem(ctx, f.resolvePath(remote))
+	file, err := f.filen.FindFile(ctx, f.resolvePath(remote))
 	if err != nil {
 		return nil, err
 	}
-	file, ok := obj.(*types.File)
-	if !ok || obj == nil {
+	if file == nil {
 		return nil, fs.ErrorObjectNotFound
 	}
 	return &File{
@@ -349,14 +348,9 @@ func (file *File) Remote() string {
 }
 
 func (file *File) ModTime(ctx context.Context) time.Time {
-	// doing this 'properly' is annoying
-	// we'd have to call FindItem which can be pretty slow
-	// if the backend API gets changed allowing for single call FindItem calls
-	// then we should probably swap over to that
 	if file.file.LastModified.IsZero() {
-		obj, err := file.fs.filen.FindItem(ctx, file.path)
-		newFile, ok := obj.(*types.File)
-		if err == nil && ok {
+		newFile, err := file.fs.filen.FindFile(ctx, file.path)
+		if err == nil && newFile != nil {
 			file.file = newFile
 		}
 	}
@@ -372,16 +366,14 @@ func (file *File) Hash(ctx context.Context, ty hash.Type) (string, error) {
 		return "", hash.ErrUnsupported
 	}
 	if file.file.Hash == "" {
-		maybeFile, err := file.fs.filen.FindItem(ctx, file.path)
+		foundFile, err := file.fs.filen.FindFile(ctx, file.path)
 		if err != nil {
 			return "", err
 		}
-		foundFile, ok := maybeFile.(*types.File)
-		if !ok {
-			return "", errors.New("not a file")
+		if foundFile == nil {
+			return "", fs.ErrorObjectNotFound
 		}
 		file.file = foundFile
-		return "", nil
 	}
 	return file.file.Hash, nil
 }
