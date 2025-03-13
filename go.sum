@@ -65,6 +65,8 @@ github.com/FilenCloudDienste/filen-sdk-go v0.0.14 h1:50besTyGHLdthq+SbrdcskHYK7P
 github.com/FilenCloudDienste/filen-sdk-go v0.0.14/go.mod h1:FWYvdxuDc5sDfhj02HwpmsGTgPLCHklT/l5J0A2HINw=
 github.com/FilenCloudDienste/filen-sdk-go v0.0.15 h1:THA+C9XIpZ44Bfcg80GpQ3g1KVdDUUXapg+l2VA48UA=
 github.com/FilenCloudDienste/filen-sdk-go v0.0.15/go.mod h1:FWYvdxuDc5sDfhj02HwpmsGTgPLCHklT/l5J0A2HINw=
+github.com/FilenCloudDienste/filen-sdk-go v0.0.16 h1:y3fj1vDltwuK4HZ+iytz8JgLhBX7cWmUp14alUMCWLQ=
+github.com/FilenCloudDienste/filen-sdk-go v0.0.16/go.mod h1:FWYvdxuDc5sDfhj02HwpmsGTgPLCHklT/l5J0A2HINw=
 github.com/Files-com/files-sdk-go/v3 v3.2.123 h1:Pa1Vkyrp60QyCBxM9fki3xCu1FZJYzP4U+4pZM4BBw8=
 github.com/Files-com/files-sdk-go/v3 v3.2.123/go.mod h1:Y/bCHoPJNPKz2hw1ADXjQXJP378HODwK+g/5SR2gqfU=
 github.com/IBM/go-sdk-core/v5 v5.18.5 h1:g0JRl3sYXJczB/yuDlrN6x22LJ6jIxhp0Sa4ARNW60c=
