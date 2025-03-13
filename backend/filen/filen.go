@@ -26,20 +26,23 @@ func init() {
 		NewFs:       NewFs,
 		Options: []fs.Option{
 			{
-				Name:     "email",
-				Help:     "Filen account email",
+				Name:     "Email",
+				Help:     "The email of your Filen account",
 				Required: true,
 			},
 			{
-				Name:       "password",
-				Help:       "Filen account password",
+				Name:       "Password",
+				Help:       "The password of your Filen account",
 				Required:   true,
 				IsPassword: true,
 				Sensitive:  true,
 			},
 			{
-				Name:       "api_key",
-				Help:       "Filen account API Key",
+				Name: "API Key",
+				Help: `An API Key for your Filen account 
+
+Get this using the Filen CLI export-api-key command
+You can download the Filen CLI from https://github.com/FilenCloudDienste/filen-cli`,
 				Required:   true,
 				IsPassword: true,
 				Sensitive:  true,
@@ -105,9 +108,9 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 
 // Options defines the configuration for this backend
 type Options struct {
-	Email    string               `config:"email"`
-	Password string               `config:"password"`
-	APIKey   string               `config:"api_key"`
+	Email    string               `config:"Email"`
+	Password string               `config:"Password"`
+	APIKey   string               `config:"API Key"`
 	Encoder  encoder.MultiEncoder `config:"encoding"`
 }
 
