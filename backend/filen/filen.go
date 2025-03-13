@@ -54,6 +54,7 @@ func init() {
 	})
 }
 
+// NewFs constructs a Fs at the path root
 func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, error) {
 	opt := new(Options)
 	err := configstruct.Set(m, opt)
@@ -102,18 +103,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	return fileSystem, err
 }
 
-type Fs struct {
-	name  string
-	root  Directory
-	filen *sdk.Filen
-	Enc   encoder.MultiEncoder
-}
-
-// resolvePath returns the absolute path specified by the input path, which is seen relative to the remote's root.
-func (f *Fs) resolvePath(path string) string {
-	return pathModule.Join(f.root.path, path)
-}
-
+// Options defines the configuration for this backend
 type Options struct {
 	Email    string               `config:"email"`
 	Password string               `config:"password"`
@@ -121,26 +111,40 @@ type Options struct {
 	Encoder  encoder.MultiEncoder `config:"encoding"`
 }
 
+// Fs represents a virtual filesystem mounted on a specific root folder
+type Fs struct {
+	name  string
+	root  Directory
+	filen *sdk.Filen
+	Enc   encoder.MultiEncoder
+}
+
+// Name of the remote (as passed into NewFs)
 func (f *Fs) Name() string {
 	return f.name
 }
 
+// Root of the remote (as passed into NewFs)
 func (f *Fs) Root() string {
 	return f.root.path
 }
 
+// String converts this Fs to a string
 func (f *Fs) String() string {
 	return fmt.Sprintf("Filen %s at /%s", f.filen.Email, f.root.String())
 }
 
+// Precision return the precision of this Fs
 func (f *Fs) Precision() time.Duration {
 	return time.Millisecond
 }
 
+// Hashes returns the supported hash sets.
 func (f *Fs) Hashes() hash.Set {
 	return hash.Set(hash.SHA512)
 }
 
+// Features returns the optional features of this Fs
 func (f *Fs) Features() *fs.Features {
 	return &fs.Features{
 		ReadMimeType: true,
@@ -154,6 +158,15 @@ func (f *Fs) Features() *fs.Features {
 	}
 }
 
+// List the objects and directories in dir into entries.  The
+// entries can be returned in any order but should be for a
+// complete directory.
+//
+// dir should be "" to list the root, and should not have
+// trailing slashes.
+//
+// This should return ErrDirNotFound if the directory isn't
+// found.
 func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
 	dir = f.Enc.FromStandardPath(dir)
 	// find directory uuid
@@ -191,6 +204,12 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 	return entries, nil
 }
 
+// NewObject finds the Object at remote.  If it can't be found
+// it returns the error ErrorObjectNotFound.
+//
+// If remote points to a directory then it should return
+// ErrorIsDir if possible without doing any extra work,
+// otherwise ErrorObjectNotFound.
 func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	remote = f.Enc.FromStandardPath(remote)
 	file, err := f.filen.FindFile(ctx, f.resolvePath(remote))
@@ -207,6 +226,15 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	}, nil
 }
 
+// Put in to the remote path with the modTime given of the given size
+//
+// When called from outside an Fs by rclone, src.Size() will always be >= 0.
+// But for unknown-sized objects (indicated by src.Size() == -1), Put should either
+// return an error or upload it properly (rather than e.g. calling panic).
+//
+// May create the object even if it returns an error - if so
+// will return the object and the error, otherwise will return
+// nil and the error
 func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
 	path := f.Enc.FromStandardPath(src.Remote())
 	resolvedPath := f.resolvePath(path)
@@ -230,6 +258,9 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 	}, nil
 }
 
+// Mkdir makes the directory (container, bucket)
+//
+// Shouldn't return an error if it already exists
 func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 	dirObj, err := f.filen.FindDirectoryOrCreate(ctx, f.resolvePath(f.Enc.FromStandardPath(dir)))
 	if err != nil {
@@ -241,6 +272,9 @@ func (f *Fs) Mkdir(ctx context.Context, dir string) error {
 	return nil
 }
 
+// Rmdir removes the directory (container, bucket) if empty
+//
+// Return an error if it doesn't exist or isn't empty
 func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 	// find directory
 	resolvedPath := f.resolvePath(f.Enc.FromStandardPath(dir))
@@ -271,18 +305,19 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 	return nil
 }
 
-// Directory
-
+// Directory is Filen's directory type
 type Directory struct {
 	fs        *Fs
 	path      string
 	directory types.DirectoryInterface
 }
 
+// Fs returns read only access to the Fs that this object is part of
 func (dir *Directory) Fs() fs.Info {
 	return dir.fs
 }
 
+// String returns a description of the Object
 func (dir *Directory) String() string {
 	if dir == nil {
 		return "<nil>"
@@ -290,10 +325,13 @@ func (dir *Directory) String() string {
 	return dir.Remote()
 }
 
+// Remote returns the remote path
 func (dir *Directory) Remote() string {
 	return dir.fs.Enc.ToStandardPath(dir.path)
 }
 
+// ModTime returns the modification date of the file
+// It should return a best guess if one isn't available
 func (dir *Directory) ModTime(ctx context.Context) time.Time {
 	directory, ok := dir.directory.(*types.Directory)
 	if !ok {
@@ -312,30 +350,38 @@ func (dir *Directory) ModTime(ctx context.Context) time.Time {
 	return directory.Created
 }
 
+// Size returns the size of the file
+//
+// filen doesn't have an efficient way to find the size of a directory
 func (dir *Directory) Size() int64 {
 	return -1
 }
 
+// Items returns the count of items in this directory or this
+// directory and subdirectories if known, -1 for unknown
 func (dir *Directory) Items() int64 {
 	return -1
 }
 
+// ID returns the internal ID of this directory if known, or
+// "" otherwise
 func (dir *Directory) ID() string {
 	return dir.directory.GetUUID()
 }
 
-// File
-
+// File is Filen's normal file
 type File struct {
 	fs   *Fs
 	path string
 	file *types.File
 }
 
+// Fs returns read only access to the Fs that this object is part of
 func (file *File) Fs() fs.Info {
 	return file.fs
 }
 
+// String returns a description of the Object
 func (file *File) String() string {
 	if file == nil {
 		return "<nil>"
@@ -343,10 +389,13 @@ func (file *File) String() string {
 	return file.Remote()
 }
 
+// Remote returns the remote path
 func (file *File) Remote() string {
 	return file.fs.Enc.ToStandardPath(file.path)
 }
 
+// ModTime returns the modification date of the file
+// It should return a best guess if one isn't available
 func (file *File) ModTime(ctx context.Context) time.Time {
 	if file.file.LastModified.IsZero() {
 		newFile, err := file.fs.filen.FindFile(ctx, file.path)
@@ -357,10 +406,13 @@ func (file *File) ModTime(ctx context.Context) time.Time {
 	return file.file.LastModified
 }
 
+// Size returns the size of the file
 func (file *File) Size() int64 {
 	return int64(file.file.Size)
 }
 
+// Hash returns the selected checksum of the file
+// If no checksum is available it returns ""
 func (file *File) Hash(ctx context.Context, ty hash.Type) (string, error) {
 	if ty != hash.SHA512 {
 		return "", hash.ErrUnsupported
@@ -378,15 +430,18 @@ func (file *File) Hash(ctx context.Context, ty hash.Type) (string, error) {
 	return file.file.Hash, nil
 }
 
+// Storable says whether this object can be stored
 func (file *File) Storable() bool {
 	return true
 }
 
+// SetModTime sets the metadata on the object to set the modification date
 func (file *File) SetModTime(ctx context.Context, t time.Time) error {
 	file.file.LastModified = t
 	return file.fs.filen.UpdateMeta(ctx, file.file)
 }
 
+// Open opens the file for read.  Call Close() on the returned io.ReadCloser
 func (file *File) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadCloser, error) {
 	fs.FixRangeOption(options, file.Size())
 	// Create variables to hold our options
@@ -407,6 +462,11 @@ func (file *File) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadCl
 	return readCloser, nil
 }
 
+// Update in to the object with the modTime given of the given size
+//
+// When called from outside an Fs by rclone, src.Size() will always be >= 0.
+// But for unknown-sized objects (indicated by src.Size() == -1), Upload should either
+// return an error or update the object properly (rather than e.g. calling panic).
 func (file *File) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) error {
 	newModTime := src.ModTime(ctx)
 	newIncomplete, err := file.file.NewFromBase(file.fs.filen.AuthVersion)
@@ -423,6 +483,7 @@ func (file *File) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, o
 	return nil
 }
 
+// Removes this object
 func (file *File) Remove(ctx context.Context) error {
 	err := file.fs.filen.TrashFile(ctx, *file.file)
 	if err != nil {
@@ -431,14 +492,36 @@ func (file *File) Remove(ctx context.Context) error {
 	return nil
 }
 
+// MimeType returns the content type of the Object if
+// known, or "" if not
 func (file *File) MimeType(_ context.Context) string {
 	return file.file.MimeType
 }
 
+// ID returns the ID of the Object if known, or "" if not
 func (file *File) ID() string {
 	return file.file.GetUUID()
 }
 
+// ParentID returns the ID of the parent directory if known or nil if not
 func (file *File) ParentID() string {
 	return file.file.GetParent()
 }
+
+// helpers
+
+// resolvePath returns the absolute path specified by the input path, which is seen relative to the remote's root.
+func (f *Fs) resolvePath(path string) string {
+	return pathModule.Join(f.root.path, path)
+}
+
+// Check the interfaces are satisfied
+var (
+	_ fs.Fs        = (*Fs)(nil)
+	_ fs.Directory = (*Directory)(nil)
+	//_ fs.SetModTimer = (*Directory)(nil) todo
+	_ fs.Object     = (*File)(nil)
+	_ fs.MimeTyper  = (*File)(nil)
+	_ fs.IDer       = (*File)(nil)
+	_ fs.ParentIDer = (*File)(nil)
+)
