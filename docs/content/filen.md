@@ -1,8 +1,7 @@
 ---
 title: "Filen"
 description: "Rclone docs for Filen"
-versionIntroduced: "TODO"
-status: Alpha
+versionIntroduced: "1.71"
 ---
 
 # {{< icon "fa fa-solid fa-f" >}} Filen
