@@ -284,7 +284,7 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 		})
 	}
 	for _, file := range files {
-		file := &File{
+		file := &Object{
 			fs:   f,
 			path: pathModule.Join(dir, file.Name),
 			file: file,
@@ -309,7 +309,7 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	if file == nil {
 		return nil, fs.ErrorObjectNotFound
 	}
-	return &File{
+	return &Object{
 		fs:   f,
 		path: remote,
 		file: file,
@@ -341,7 +341,7 @@ func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options .
 	if err != nil {
 		return nil, err
 	}
-	return &File{
+	return &Object{
 		fs:   f,
 		path: path,
 		file: uploadedFile,
@@ -468,81 +468,81 @@ func (dir *Directory) ID() string {
 	return dir.directory.GetUUID()
 }
 
-// File is Filen's normal file
-type File struct {
+// Object is Filen's normal file
+type Object struct {
 	fs   *Fs
 	path string
 	file *types.File
 }
 
 // Fs returns read only access to the Fs that this object is part of
-func (file *File) Fs() fs.Info {
-	return file.fs
+func (o *Object) Fs() fs.Info {
+	return o.fs
 }
 
 // String returns a description of the Object
-func (file *File) String() string {
-	if file == nil {
+func (o *Object) String() string {
+	if o == nil {
 		return "<nil>"
 	}
-	return file.Remote()
+	return o.Remote()
 }
 
 // Remote returns the remote path
-func (file *File) Remote() string {
-	return file.fs.Enc.ToStandardPath(file.path)
+func (o *Object) Remote() string {
+	return o.fs.Enc.ToStandardPath(o.path)
 }
 
 // ModTime returns the modification date of the file
 // It should return a best guess if one isn't available
-func (file *File) ModTime(ctx context.Context) time.Time {
-	if file.file.LastModified.IsZero() {
-		newFile, err := file.fs.filen.FindFile(ctx, file.fs.resolvePath(file.path))
+func (o *Object) ModTime(ctx context.Context) time.Time {
+	if o.file.LastModified.IsZero() {
+		newFile, err := o.fs.filen.FindFile(ctx, o.fs.resolvePath(o.path))
 		if err == nil && newFile != nil {
-			file.file = newFile
+			o.file = newFile
 		}
 	}
-	return file.file.LastModified
+	return o.file.LastModified
 }
 
 // Size returns the size of the file
-func (file *File) Size() int64 {
-	return int64(file.file.Size)
+func (o *Object) Size() int64 {
+	return int64(o.file.Size)
 }
 
 // Hash returns the selected checksum of the file
 // If no checksum is available it returns ""
-func (file *File) Hash(ctx context.Context, ty hash.Type) (string, error) {
+func (o *Object) Hash(ctx context.Context, ty hash.Type) (string, error) {
 	if ty != hash.SHA512 {
 		return "", hash.ErrUnsupported
 	}
-	if file.file.Hash == "" {
-		foundFile, err := file.fs.filen.FindFile(ctx, file.fs.resolvePath(file.path))
+	if o.file.Hash == "" {
+		foundFile, err := o.fs.filen.FindFile(ctx, o.fs.resolvePath(o.path))
 		if err != nil {
 			return "", err
 		}
 		if foundFile == nil {
 			return "", fs.ErrorObjectNotFound
 		}
-		file.file = foundFile
+		o.file = foundFile
 	}
-	return file.file.Hash, nil
+	return o.file.Hash, nil
 }
 
 // Storable says whether this object can be stored
-func (file *File) Storable() bool {
+func (o *Object) Storable() bool {
 	return true
 }
 
 // SetModTime sets the metadata on the object to set the modification date
-func (file *File) SetModTime(ctx context.Context, t time.Time) error {
-	file.file.LastModified = t
-	return file.fs.filen.UpdateMeta(ctx, file.file)
+func (o *Object) SetModTime(ctx context.Context, t time.Time) error {
+	o.file.LastModified = t
+	return o.fs.filen.UpdateMeta(ctx, o.file)
 }
 
 // Open opens the file for read.  Call Close() on the returned io.ReadCloser
-func (file *File) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadCloser, error) {
-	fs.FixRangeOption(options, file.Size())
+func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadCloser, error) {
+	fs.FixRangeOption(options, o.Size())
 	// Create variables to hold our options
 	var offset int64
 	var limit int64 = -1 // -1 means no limit
@@ -557,7 +557,7 @@ func (file *File) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadCl
 	}
 
 	// Get the base reader
-	readCloser := file.fs.filen.GetDownloadReaderWithOffset(ctx, file.file, int(offset), int(limit))
+	readCloser := o.fs.filen.GetDownloadReaderWithOffset(ctx, o.file, int(offset), int(limit))
 	return readCloser, nil
 }
 
@@ -566,29 +566,29 @@ func (file *File) Open(ctx context.Context, options ...fs.OpenOption) (io.ReadCl
 // When called from outside an Fs by rclone, src.Size() will always be >= 0.
 // But for unknown-sized objects (indicated by src.Size() == -1), Upload should either
 // return an error or update the object properly (rather than e.g. calling panic).
-func (file *File) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) error {
+func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) error {
 	newModTime := src.ModTime(ctx)
-	newIncomplete, err := file.file.NewFromBase(file.fs.filen.FileEncryptionVersion)
+	newIncomplete, err := o.file.NewFromBase(o.fs.filen.FileEncryptionVersion)
 	if err != nil {
 		return err
 	}
 	newIncomplete.LastModified = newModTime
 	newIncomplete.Created = newModTime
 	newIncomplete.SetMimeType(fs.MimeType(ctx, src))
-	uploadedFile, err := file.fs.filen.UploadFile(ctx, newIncomplete, in)
+	uploadedFile, err := o.fs.filen.UploadFile(ctx, newIncomplete, in)
 	if err != nil {
 		return err
 	}
-	file.file = uploadedFile
+	o.file = uploadedFile
 	return nil
 }
 
 // Remove this object
-func (file *File) Remove(ctx context.Context) error {
-	if file.file == nil {
+func (o *Object) Remove(ctx context.Context) error {
+	if o.file == nil {
 		return nil
 	}
-	err := file.fs.filen.TrashFile(ctx, *file.file)
+	err := o.fs.filen.TrashFile(ctx, *o.file)
 	if err != nil {
 		return err
 	}
@@ -597,18 +597,18 @@ func (file *File) Remove(ctx context.Context) error {
 
 // MimeType returns the content type of the Object if
 // known, or "" if not
-func (file *File) MimeType(_ context.Context) string {
-	return file.file.MimeType
+func (o *Object) MimeType(_ context.Context) string {
+	return o.file.MimeType
 }
 
 // ID returns the ID of the Object if known, or "" if not
-func (file *File) ID() string {
-	return file.file.GetUUID()
+func (o *Object) ID() string {
+	return o.file.GetUUID()
 }
 
 // ParentID returns the ID of the parent directory if known or nil if not
-func (file *File) ParentID() string {
-	return file.file.GetParent()
+func (o *Object) ParentID() string {
+	return o.file.GetParent()
 }
 
 // Purge all files in the directory specified
@@ -638,7 +638,7 @@ func (f *Fs) Purge(ctx context.Context, dir string) error {
 //
 // If it isn't possible then return fs.ErrorCantMove
 func (f *Fs) Move(ctx context.Context, src fs.Object, remote string) (fs.Object, error) {
-	obj, ok := src.(*File)
+	obj, ok := src.(*Object)
 	if !ok {
 		return nil, fmt.Errorf("can't move %T: %w", src, fs.ErrorCantMove)
 	}
@@ -770,13 +770,13 @@ func (f *Fs) rename(ctx context.Context, item types.NonRootFileSystemObject, new
 // and making a copy with the passed path
 //
 // this is to work around the fact that rclone expects to have to delete a file after moving
-func moveFileObjIntoNewPath(obj *File, newPath string) *File {
-	newFile := &File{
-		fs:   obj.fs,
+func moveFileObjIntoNewPath(o *Object, newPath string) *Object {
+	newFile := &Object{
+		fs:   o.fs,
 		path: newPath,
-		file: obj.file,
+		file: o.file,
 	}
-	obj.file = nil
+	o.file = nil
 	return newFile
 }
 
@@ -982,7 +982,7 @@ func (f *Fs) ListR(ctx context.Context, dir string, callback fs.ListRCallback) (
 		if err != nil {
 			return err
 		}
-		err = listHelper.Add(&File{
+		err = listHelper.Add(&Object{
 			fs:   f,
 			file: file,
 			path: pathModule.Join(parentPath, file.GetName()),
@@ -1070,10 +1070,10 @@ var (
 	_ fs.ListRer     = &Fs{}
 	_ fs.Abouter     = &Fs{}
 	_ fs.Directory   = &Directory{}
-	_ fs.Object      = &File{}
-	_ fs.MimeTyper   = &File{}
-	_ fs.IDer        = &File{}
-	_ fs.ParentIDer  = &File{}
+	_ fs.Object      = &Object{}
+	_ fs.MimeTyper   = &Object{}
+	_ fs.IDer        = &Object{}
+	_ fs.ParentIDer  = &Object{}
 )
 
 // todo PublicLinker,
