@@ -470,9 +470,10 @@ func (dir *Directory) ID() string {
 
 // Object is Filen's normal file
 type Object struct {
-	fs   *Fs
-	path string
-	file *types.File
+	fs      *Fs
+	path    string
+	file    *types.File
+	isMoved bool
 }
 
 // Fs returns read only access to the Fs that this object is part of
@@ -585,7 +586,7 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 
 // Remove this object
 func (o *Object) Remove(ctx context.Context) error {
-	if o.file == nil {
+	if o.isMoved { // doesn't exist at this path
 		return nil
 	}
 	err := o.fs.filen.TrashFile(ctx, *o.file)
@@ -776,7 +777,7 @@ func moveFileObjIntoNewPath(o *Object, newPath string) *Object {
 		path: newPath,
 		file: o.file,
 	}
-	o.file = nil
+	o.isMoved = true
 	return newFile
 }
 
