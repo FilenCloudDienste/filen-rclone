@@ -831,7 +831,7 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
 	}
 
 	if dstDir != nil {
-		return f.dirMoveContents(ctx, srcDirInt, dstDir, srcPath, dstPath)
+		return fs.ErrorDirExists
 	}
 
 	srcDir, ok := srcDirInt.(*types.Directory)
@@ -840,71 +840,6 @@ func (f *Fs) DirMove(ctx context.Context, src fs.Fs, srcRemote, dstRemote string
 	}
 
 	return f.dirMoveEntireDir(ctx, srcDir, srcPath, dstPath)
-}
-
-// dirMoveContents moves the contents of srcDir to dstDir
-// used for the case where the target directory exists
-// recurses if needed
-func (f *Fs) dirMoveContents(ctx context.Context, srcDir, dstDir types.DirectoryInterface, srcPath, dstPath string) error {
-	g, gCtx := errgroup.WithContext(ctx)
-	var (
-		srcDirs  []*types.Directory
-		srcFiles []*types.File
-		dstDirs  []*types.Directory
-		dstFiles []*types.File
-	)
-
-	// read source and target
-	g.Go(func() error {
-		var err error
-		srcFiles, srcDirs, err = f.filen.ReadDirectory(gCtx, srcDir)
-		return err
-	})
-	g.Go(func() error {
-		var err error
-		dstFiles, dstDirs, err = f.filen.ReadDirectory(gCtx, dstDir)
-		return err
-	})
-
-	if err := g.Wait(); err != nil {
-		return err
-	}
-
-	dstDirNamesSet := make(map[string]*types.Directory, len(dstDirs)+len(dstFiles))
-	for _, dir := range dstDirs {
-		dstDirNamesSet[dir.GetName()] = dir
-	}
-
-	g, gCtx = errgroup.WithContext(ctx)
-	g.SetLimit(sdk.MaxSmallCallers)
-
-	for _, dir := range srcDirs {
-		currSrcPath := pathModule.Join(srcPath, dir.GetName())
-		currDstPath := pathModule.Join(dstPath, dir.GetName())
-		if dupDir, ok := dstDirNamesSet[dir.GetName()]; ok {
-			// if duplicate, recurse
-			g.Go(func() error {
-				return f.dirMoveContents(gCtx, dir, dupDir, currSrcPath, currDstPath)
-			})
-		} else {
-			// else move
-			g.Go(func() error {
-				return f.moveWithParentUUID(gCtx, dir, dstDir.GetUUID())
-			})
-		}
-	}
-
-	for _, file := range srcFiles {
-		// move all files with overwrite
-		g.Go(func() error {
-			return f.moveWithParentUUID(gCtx, file, dstDir.GetUUID())
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		return err
-	}
-	return nil
 }
 
 // dirMoveEntireDir moves srcDir to newPath
