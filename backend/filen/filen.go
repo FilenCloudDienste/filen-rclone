@@ -123,6 +123,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		return nil, err
 	}
 
+	root = opt.Encoder.FromStandardPath(root)
 	password, err := obscure.Reveal(opt.Password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to reveal password: %w", err)
