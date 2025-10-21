@@ -61,8 +61,8 @@ github.com/AzureAD/microsoft-authentication-library-for-go v1.4.2 h1:oygO0locgZJ
 github.com/AzureAD/microsoft-authentication-library-for-go v1.4.2/go.mod h1:wP83P5OoQ5p6ip3ScPr0BAq0BvuPAvacpEuSzyouqAI=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym/WlBOVXweHU+Q+/VP0lqqI8lqeDx9IjBqo=
-github.com/FilenCloudDienste/filen-sdk-go v0.0.31 h1:4Uzich+gaLncFG8D2IPz7nV94LzeWiKcIQH1xYEMlFg=
-github.com/FilenCloudDienste/filen-sdk-go v0.0.31/go.mod h1:XkI1Iq30/tU8vk4Zd1cKr2cCTiFqBEf0ZfG4+KKUBrY=
+github.com/FilenCloudDienste/filen-sdk-go v0.0.32 h1:83QVlITW15pS72ioDO1SErCrV9ACoOvwCndrr22i+Qc=
+github.com/FilenCloudDienste/filen-sdk-go v0.0.32/go.mod h1:XkI1Iq30/tU8vk4Zd1cKr2cCTiFqBEf0ZfG4+KKUBrY=
 github.com/Files-com/files-sdk-go/v3 v3.2.173 h1:OPDjpkEWXO+WSGX1qQ10Y51do178i9z4DdFpI25B+iY=
 github.com/Files-com/files-sdk-go/v3 v3.2.173/go.mod h1:HnPrW1lljxOjdkR5Wm6DjtdHwWdcm/afts2N6O+iiJo=
 github.com/IBM/go-sdk-core/v5 v5.20.0 h1:rG1fn5GmJfFzVtpDKndsk6MgcarluG8YIWf89rVqLP8=
