@@ -1,0 +1,239 @@
+name: Make Draft Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version for the release (e.g., v1.65.0)'
+        required: true
+        default: 'v1.65.0'
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # Intel/AMD64 builds
+          - os: ubuntu-latest
+            go-version: '1.24'
+            platform: amd64
+          - os: windows-latest
+            go-version: '1.24'
+            platform: amd64
+          # ARM builds
+          - os: ubuntu-latest
+            go-version: '1.24'
+            platform: arm64
+          - os: windows-latest
+            go-version: '1.24'
+            platform: arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      - name: Install WinFsp (Windows)
+        if: startsWith(matrix.os, 'windows')
+        run: |
+          choco install -y winfsp zip
+          echo "CPATH=C:\Program Files\WinFsp\inc\fuse;C:\Program Files (x86)\WinFsp\inc\fuse" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build Linux AMD64
+        if: matrix.os == 'ubuntu-latest' && matrix.platform == 'amd64'
+        run: GOARCH=amd64 go build -trimpath -ldflags -s -o rclone-amd64-linux
+
+      - name: Build Linux ARM64
+        if: matrix.os == 'ubuntu-latest' && matrix.platform == 'arm64'
+        run: GOARCH=arm64 go build -trimpath -ldflags -s -o rclone-arm64-linux
+
+      - name: Build Windows AMD64
+        if: matrix.os == 'windows-latest' && matrix.platform == 'amd64'
+        run: |
+          $env:CGO_ENABLED = "0"
+          go build -trimpath -ldflags -s -tags cmount -o rclone-amd64.exe
+
+      - name: Build Windows ARM64
+        if: matrix.os == 'windows-latest' && matrix.platform == 'arm64'
+        run: |
+          $env:CGO_ENABLED = "0"
+          $env:GOARCH = "arm64"
+          go build -trimpath -ldflags -s -tags cmount -o rclone-arm64.exe
+
+      - name: Upload rclone artifact (Linux AMD64)
+        if: matrix.os == 'ubuntu-latest' && matrix.platform == 'amd64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rclone-linux-amd64
+          path: rclone-amd64-linux
+
+      - name: Upload rclone artifact (Linux ARM64)
+        if: matrix.os == 'ubuntu-latest' && matrix.platform == 'arm64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rclone-linux-arm64
+          path: rclone-arm64-linux
+
+
+
+      - name: Upload rclone artifact (Windows AMD64)
+        if: matrix.os == 'windows-latest' && matrix.platform == 'amd64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rclone-windows-amd64
+          path: rclone-amd64.exe
+
+      - name: Upload rclone artifact (Windows ARM64)
+        if: matrix.os == 'windows-latest' && matrix.platform == 'arm64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rclone-windows-arm64
+          path: rclone-arm64.exe
+
+  build_macos:
+    name: Build macOS artifacts
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      APPLE_DEVELOPER_ID_CERT: ${{ secrets.APPLE_DEVELOPER_ID_CERT }}
+      APPLE_DEVELOPER_ID_CERT_PASS: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASS }}
+      APPLE_NOTARIZE_ID: ${{ secrets.APPLE_NOTARIZE_ID }}
+      APPLE_NOTARIZE_PASS: ${{ secrets.APPLE_NOTARIZE_PASS }}
+      APPLE_NOTARIZE_TEAM_ID: ${{ secrets.APPLE_NOTARIZE_TEAM_ID }}
+    strategy:
+      matrix:
+        include:
+          - platform: amd64
+            arch: x64
+          - platform: arm64
+            arch: arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Install macFUSE
+        run: brew install --cask macfuse
+
+      - name: Decode macOS certificate
+        run: |
+          echo "$APPLE_DEVELOPER_ID_CERT" | base64 --decode > certificate.p12
+
+      - name: Import certificate to keychain
+        run: |
+          security create-keychain -p actions build.keychain
+          security import certificate.p12 -k ~/Library/Keychains/build.keychain -P "$APPLE_DEVELOPER_ID_CERT_PASS" -T /usr/bin/codesign
+          security list-keychains -d user -s ~/Library/Keychains/build.keychain
+          security set-keychain-settings -t 3600 -u ~/Library/Keychains/build.keychain
+          security unlock-keychain -p actions ~/Library/Keychains/build.keychain
+          security set-key-partition-list -S apple-tool:,apple: -s -k actions ~/Library/Keychains/build.keychain
+
+      - name: Build macOS ${{ matrix.platform }}
+        run: |
+          GOARCH=${{ matrix.platform }} go build -trimpath -ldflags -s -tags cmount -o rclone-${{ matrix.platform }}-macos
+
+      - name: Code sign binary
+        run: |
+          codesign --timestamp --entitlements=.github/workflows/entitlements.plist --options runtime --sign "Developer ID Application: Filen Cloud Dienste UG (haftungsbeschraenkt)" -v rclone-${{ matrix.platform }}-macos
+
+      - name: Create zip archive for notarization
+        run: |
+          ditto -c -k --keepParent rclone-${{ matrix.platform }}-macos rclone-${{ matrix.platform }}-macos.zip
+
+      - name: Notarize app
+        run: |
+          xcrun notarytool submit rclone-${{ matrix.platform }}-macos.zip --apple-id "$APPLE_NOTARIZE_ID" --password "$APPLE_NOTARIZE_PASS" --team-id "$APPLE_NOTARIZE_TEAM_ID" --wait
+
+      - name: Extract notarized binary
+        run: |
+          unzip -o rclone-${{ matrix.platform }}-macos.zip
+          rm rclone-${{ matrix.platform }}-macos.zip
+
+      - name: Generate SHA256 hash
+        run: |
+          shasum -a 256 rclone-${{ matrix.platform }}-macos > rclone-${{ matrix.platform }}-macos.sha256.txt
+
+      - name: Upload notarized rclone artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rclone-macos-${{ matrix.platform }}
+          path: |
+            rclone-${{ matrix.platform }}-macos
+            rclone-${{ matrix.platform }}-macos.sha256.txt
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain build.keychain
+          rm -f certificate.p12
+
+  create_release:
+    name: Create GitHub Release
+    needs: [build, build_macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release_assets
+          
+          # Rename and move files to release_assets with better names
+          # Linux
+          cp ./artifacts/rclone-linux-amd64/rclone-amd64-linux ./release_assets/rclone-${{ github.event.inputs.version }}-linux-amd64
+          cp ./artifacts/rclone-linux-arm64/rclone-arm64-linux ./release_assets/rclone-${{ github.event.inputs.version }}-linux-arm64
+          
+          # Windows
+          cp ./artifacts/rclone-windows-amd64/rclone-amd64.exe ./release_assets/rclone-${{ github.event.inputs.version }}-windows-amd64.exe
+          cp ./artifacts/rclone-windows-arm64/rclone-arm64.exe ./release_assets/rclone-${{ github.event.inputs.version }}-windows-arm64.exe
+          
+          # macOS
+          cp ./artifacts/rclone-macos-amd64/rclone-amd64-macos ./release_assets/rclone-${{ github.event.inputs.version }}-macos-amd64
+          cp ./artifacts/rclone-macos-arm64/rclone-arm64-macos ./release_assets/rclone-${{ github.event.inputs.version }}-macos-arm64
+          
+          # Generate SHA256 hashes for all release assets
+          cd release_assets
+          sha256sum * > SHA256SUMS.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: Rclone ${{ github.event.inputs.version }}
+          body: |
+            # Rclone ${{ github.event.inputs.version }}
+            
+            This is a draft release. Please edit this description before publishing.
+            
+            ## Assets
+            
+            * Linux (amd64): `rclone-${{ github.event.inputs.version }}-linux-amd64`
+            * Linux (arm64): `rclone-${{ github.event.inputs.version }}-linux-arm64`
+            * Windows (amd64): `rclone-${{ github.event.inputs.version }}-windows-amd64.exe`
+            * Windows (arm64): `rclone-${{ github.event.inputs.version }}-windows-arm64.exe`
+            * macOS (amd64): `rclone-${{ github.event.inputs.version }}-macos-amd64`
+            * macOS (arm64): `rclone-${{ github.event.inputs.version }}-macos-arm64`
+            
+            SHA256 checksums are available in the `SHA256SUMS.txt` file.
+          draft: true
+          prerelease: true
+          files: |
+            ./release_assets/*
